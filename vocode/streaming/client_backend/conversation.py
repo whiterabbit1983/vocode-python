@@ -35,7 +35,7 @@ from vocode.streaming.utils import events_manager
 class ConversationRouter(BaseRouter):
     def __init__(
         self,
-        agent: BaseAgent,
+        agent_thunk: Callable[[], BaseAgent],
         transcriber_thunk: Callable[
             [InputAudioConfig], BaseTranscriber
         ] = lambda input_audio_config: DeepgramTranscriber(
@@ -55,7 +55,7 @@ class ConversationRouter(BaseRouter):
     ):
         super().__init__()
         self.transcriber_thunk = transcriber_thunk
-        self.agent_thunk = lambda: agent
+        self.agent_thunk = agent_thunk
         self.synthesizer_thunk = synthesizer_thunk
         self.logger = logger or logging.getLogger(__name__)
         self.router = APIRouter()
