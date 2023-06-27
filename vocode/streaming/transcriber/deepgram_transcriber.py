@@ -49,6 +49,7 @@ class DeepgramTranscriber(BaseAsyncTranscriber[DeepgramTranscriberConfig]):
         transcriber_config: DeepgramTranscriberConfig,
         api_key: Optional[str] = None,
         logger: Optional[logging.Logger] = None,
+        should_stream_interim: bool = False,
     ):
         super().__init__(transcriber_config)
         self.api_key = api_key or getenv("DEEPGRAM_API_KEY")
@@ -60,6 +61,7 @@ class DeepgramTranscriber(BaseAsyncTranscriber[DeepgramTranscriberConfig]):
         self.is_ready = False
         self.logger = logger or logging.getLogger(__name__)
         self.audio_cursor = 0.
+        self.should_stream_interim = should_stream_interim
 
     async def _run_loop(self):
         restarts = 0
@@ -245,6 +247,13 @@ class DeepgramTranscriber(BaseAsyncTranscriber[DeepgramTranscriberConfig]):
                         )
                         time_silent = self.calculate_time_silent(data)
                     else:
+                        if self.should_stream_interim:
+                            self.output_queue.put_nowait(
+                                Transcription(
+                                    message=json.dumps(data), confidence=confidence, is_final=False
+                                )
+                            )
+                            
                         time_silent += data["duration"]
                 self.logger.debug("Terminating Deepgram transcriber receiver")
 
