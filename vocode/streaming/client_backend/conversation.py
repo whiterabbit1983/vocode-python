@@ -70,6 +70,7 @@ class ConversationRouter(BaseRouter):
         synthesizer = self.synthesizer_thunk(start_message.output_audio_config)
         agent = self.agent_thunk(start_message.metadata)
         synthesizer.synthesizer_config.should_encode_as_wav = True
+        self.logger.debug(f"start message: {start_message.dict()}")
         return StreamingConversation(
             output_device=output_device,
             transcriber=transcriber,
