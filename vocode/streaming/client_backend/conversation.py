@@ -35,7 +35,7 @@ from vocode.streaming.utils import events_manager
 class ConversationRouter(BaseRouter):
     def __init__(
         self,
-        agent_thunk: Callable[[Optional[str]], BaseAgent],
+        agent_thunk: Callable[[Optional[dict]], BaseAgent],
         transcriber_thunk: Callable[
             [InputAudioConfig], BaseTranscriber
         ] = lambda input_audio_config: DeepgramTranscriber(
@@ -68,10 +68,7 @@ class ConversationRouter(BaseRouter):
     ) -> StreamingConversation:
         transcriber = self.transcriber_thunk(start_message.input_audio_config)
         synthesizer = self.synthesizer_thunk(start_message.output_audio_config)
-        situation = None
-        if start_message.meta_data is not None:
-            situation = start_message.meta_data.get("situation")
-        agent = self.agent_thunk(situation)
+        agent = self.agent_thunk(start_message.meta_data)
         synthesizer.synthesizer_config.should_encode_as_wav = True
         return StreamingConversation(
             output_device=output_device,
