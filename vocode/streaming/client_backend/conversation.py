@@ -1,5 +1,5 @@
 import logging
-from typing import Callable, Optional
+from typing import Callable, Optional, Awaitable
 import typing
 
 from fastapi import APIRouter, WebSocket
@@ -35,7 +35,7 @@ from vocode.streaming.utils import events_manager
 class ConversationRouter(BaseRouter):
     def __init__(
         self,
-        agent_thunk: Callable[[Optional[dict]], BaseAgent],
+        agent_thunk: Callable[[Optional[dict]], Awaitable[BaseAgent]],
         transcriber_thunk: Callable[
             [InputAudioConfig], BaseTranscriber
         ] = lambda input_audio_config: DeepgramTranscriber(
@@ -61,14 +61,14 @@ class ConversationRouter(BaseRouter):
         self.router = APIRouter()
         self.router.websocket("/conversation")(self.conversation)
 
-    def get_conversation(
+    async def get_conversation(
         self,
         output_device: WebsocketOutputDevice,
         start_message: AudioConfigStartMessage,
     ) -> StreamingConversation:
         transcriber = self.transcriber_thunk(start_message.input_audio_config)
         synthesizer = self.synthesizer_thunk(start_message.output_audio_config)
-        agent = self.agent_thunk(start_message.metadata)
+        agent = await self.agent_thunk(start_message.metadata)
         synthesizer.synthesizer_config.should_encode_as_wav = True
         self.logger.debug(f"start message: {start_message.dict()}")
         return StreamingConversation(
@@ -92,7 +92,7 @@ class ConversationRouter(BaseRouter):
             start_message.output_audio_config.sampling_rate,
             start_message.output_audio_config.audio_encoding,
         )
-        conversation = self.get_conversation(output_device, start_message)
+        conversation = await self.get_conversation(output_device, start_message)
         await conversation.start(lambda: websocket.send_text(ReadyMessage().json()))
         while conversation.is_active():
             message: WebSocketMessage = WebSocketMessage.parse_obj(
