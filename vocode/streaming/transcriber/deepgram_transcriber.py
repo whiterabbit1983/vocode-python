@@ -23,7 +23,7 @@ from vocode.streaming.models.audio_encoding import AudioEncoding
 
 PUNCTUATION_TERMINATORS = [".", "!", "?"]
 NUM_RESTARTS = 5
-NUM_KEEPALIVE_RESTARTS = 20
+NUM_KEEPALIVE_RESTARTS = 10
 
 
 avg_latency_hist = meter.create_histogram(
@@ -189,7 +189,6 @@ class DeepgramTranscriber(BaseAsyncTranscriber[DeepgramTranscriberConfig]):
                         data = await asyncio.wait_for(self.input_queue.get(), 5)
                     except asyncio.exceptions.TimeoutError:
                         if keepalive_restarts < NUM_KEEPALIVE_RESTARTS:
-                            self.logger.debug(f"Sender timeout error, sending keepalive, restarts: {keepalive_restarts}")
                             send_keepalive()
                             keepalive_restarts += 1
                             continue
