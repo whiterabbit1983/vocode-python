@@ -180,8 +180,9 @@ class DeepgramTranscriber(BaseAsyncTranscriber[DeepgramTranscriberConfig]):
             async def sender(ws: WebSocketClientProtocol):  # sends audio to websocket
                 while not self._ended:
                     try:
-                        data = await asyncio.wait_for(self.input_queue.get(), 5)
+                        data = await asyncio.wait_for(self.input_queue.get(), 60)
                     except asyncio.exceptions.TimeoutError:
+                        self.logger.debug(f"Sender timeout error")
                         break
                     num_channels = 1
                     sample_width = 2
