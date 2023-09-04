@@ -49,6 +49,7 @@ We're actively looking for community maintainers, so please reach out if interes
     - [gTTS](https://gtts.readthedocs.io/)
     - [StreamElements](https://streamelements.com/)
     - [Bark](https://github.com/suno-ai/bark)
+    - [AWS Polly](https://aws.amazon.com/polly/)
 
 Check out our React SDK [here](https://github.com/vocodedev/vocode-react-sdk)!
 
@@ -127,7 +128,9 @@ async def main():
     )
     await conversation.start()
     print("Conversation started, press Ctrl+C to end")
-    signal.signal(signal.SIGINT, lambda _0, _1: conversation.terminate())
+    signal.signal(
+        signal.SIGINT, lambda _0, _1: asyncio.create_task(conversation.terminate())
+    )
     while conversation.is_active():
         chunk = await microphone_input.get_audio()
         conversation.receive_audio(chunk)

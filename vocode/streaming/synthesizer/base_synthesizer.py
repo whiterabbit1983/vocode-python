@@ -1,3 +1,4 @@
+import asyncio
 import os
 from typing import (
     Any,
@@ -7,18 +8,23 @@ from typing import (
     Generic,
     List,
     Optional,
+    Tuple,
     TypeVar,
+    Union,
 )
 import math
 import io
 import wave
+import aiohttp
 from nltk.tokenize import word_tokenize
 from nltk.tokenize.treebank import TreebankWordDetokenizer
 from opentelemetry import trace
+from opentelemetry.trace import Span
 
 from vocode.streaming.agent.bot_sentiment_analyser import BotSentiment
 from vocode.streaming.models.agent import FillerAudioConfig
 from vocode.streaming.models.message import BaseMessage
+from vocode.streaming.synthesizer.miniaudio_worker import MiniaudioWorker
 from vocode.streaming.utils import convert_wav, get_chunk_size_per_second
 from vocode.streaming.models.audio_encoding import AudioEncoding
 from vocode.streaming.models.synthesizer import SynthesizerConfig
@@ -115,13 +121,24 @@ SynthesizerConfigType = TypeVar("SynthesizerConfigType", bound=SynthesizerConfig
 
 
 class BaseSynthesizer(Generic[SynthesizerConfigType]):
-    def __init__(self, synthesizer_config: SynthesizerConfigType):
+    def __init__(
+        self,
+        synthesizer_config: SynthesizerConfigType,
+        aiohttp_session: Optional[aiohttp.ClientSession] = None,
+    ):
         self.synthesizer_config = synthesizer_config
         if synthesizer_config.audio_encoding == AudioEncoding.MULAW:
             assert (
                 synthesizer_config.sampling_rate == 8000
             ), "MuLaw encoding only supports 8kHz sampling rate"
         self.filler_audios: List[FillerAudio] = []
+        if aiohttp_session:
+            # the caller is responsible for closing the session
+            self.aiohttp_session = aiohttp_session
+            self.should_close_session_on_tear_down = False
+        else:
+            self.aiohttp_session = aiohttp.ClientSession()
+            self.should_close_session_on_tear_down = True
 
     async def empty_generator(self):
         yield SynthesisResult.ChunkResult(b"", True)
@@ -219,3 +236,54 @@ class BaseSynthesizer(Generic[SynthesizerConfigType]):
                 message, seconds, len(output_bytes)
             ),
         )
+
+    async def experimental_mp3_streaming_output_generator(
+        self,
+        response: aiohttp.ClientResponse,
+        chunk_size: int,
+        create_speech_span: Optional[Span],
+    ) -> AsyncGenerator[SynthesisResult.ChunkResult, None]:
+        miniaudio_worker_input_queue: asyncio.Queue[
+            Union[bytes, None]
+        ] = asyncio.Queue()
+        miniaudio_worker_output_queue: asyncio.Queue[
+            Tuple[bytes, bool]
+        ] = asyncio.Queue()
+        miniaudio_worker = MiniaudioWorker(
+            self.synthesizer_config,
+            chunk_size,
+            miniaudio_worker_input_queue,
+            miniaudio_worker_output_queue,
+        )
+        miniaudio_worker.start()
+        stream_reader = response.content
+
+        # Create a task to send the mp3 chunks to the MiniaudioWorker's input queue in a separate loop
+        async def send_chunks():
+            async for chunk in stream_reader.iter_any():
+                miniaudio_worker.consume_nonblocking(chunk)
+            miniaudio_worker.consume_nonblocking(None)  # sentinel
+
+        try:
+            asyncio.create_task(send_chunks())
+
+            # Await the output queue of the MiniaudioWorker and yield the wav chunks in another loop
+            while True:
+                # Get the wav chunk and the flag from the output queue of the MiniaudioWorker
+                wav_chunk, is_last = await miniaudio_worker.output_queue.get()
+                if self.synthesizer_config.should_encode_as_wav:
+                    wav_chunk = encode_as_wav(wav_chunk, self.synthesizer_config)
+
+                yield SynthesisResult.ChunkResult(wav_chunk, is_last)
+                # If this is the last chunk, break the loop
+                if is_last and create_speech_span is not None:
+                    create_speech_span.end()
+                    break
+        except asyncio.CancelledError:
+            pass
+        finally:
+            miniaudio_worker.terminate()
+
+    async def tear_down(self):
+        if self.should_close_session_on_tear_down:
+            await self.aiohttp_session.close()

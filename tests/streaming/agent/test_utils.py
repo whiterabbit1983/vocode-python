@@ -1,10 +1,25 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from openai.openai_object import OpenAIObject
 from pydantic import BaseModel
+from vocode.streaming.models.actions import (
+    ActionConfig,
+    ActionInput,
+    ActionOutput,
+    FunctionCall,
+)
 import pytest
-from vocode.streaming.agent.utils import stream_openai_response_async
-
-GET_TEXT = lambda choice: choice.get("delta", {}).get("content")
+from vocode.streaming.agent.utils import (
+    collate_response_async,
+    format_openai_chat_messages_from_transcript,
+    openai_get_tokens,
+)
+from vocode.streaming.models.events import Sender
+from vocode.streaming.models.transcript import (
+    ActionFinish,
+    ActionStart,
+    Message,
+    Transcript,
+)
 
 
 async def _agen_from_list(l):
@@ -13,20 +28,35 @@ async def _agen_from_list(l):
 
 
 def create_chatgpt_openai_object(
-    delta: Dict[str, str], finish_reason: Optional[Any] = None
+    delta: Optional[Dict[str, str]] = None,
+    finish_reason: Optional[Any] = None,
+    prompt_annotations=None,
 ):
-    return OpenAIObject.construct_from(
-        {"choices": [{"delta": delta, "finish_reason": finish_reason}]}
-    )
+    inner_obj = {}
+    if prompt_annotations:
+        inner_obj["prompt_annotations"] = prompt_annotations
+        inner_obj["choices"] = []
+    elif delta:
+        inner_obj["choices"] = [{"delta": delta, "finish_reason": finish_reason}]
+    return OpenAIObject.construct_from(inner_obj)
 
 
 class StreamOpenAIResponseTestCase(BaseModel):
     openai_objects: List[OpenAIObject]
-    expected_sentences: List[str]
+    expected_sentences: List[Union[str, FunctionCall]]
+    get_functions: bool
 
 
 OPENAI_OBJECTS = [
     [
+        {
+            "prompt_annotations": [
+                {
+                    "prompt_index": 0,
+                    "content_filter_results": {},
+                }
+            ]
+        },
         {"delta": {"role": "assistant"}, "finish_reason": None},
         {"delta": {"content": "Hello"}, "finish_reason": None},
         {"delta": {"content": "!"}, "finish_reason": None},
@@ -169,6 +199,40 @@ OPENAI_OBJECTS = [
         {"delta": {"content": "."}, "finish_reason": None},
         {"delta": {}, "finish_reason": "stop"},
     ],
+    [
+        {"delta": {"role": "assistant"}, "finish_reason": None},
+        {"delta": {"content": "Hello"}, "finish_reason": None},
+        {"delta": {"content": "."}, "finish_reason": None},
+        {"delta": {"content": " What"}, "finish_reason": None},
+        {"delta": {"content": " do"}, "finish_reason": None},
+        {"delta": {"content": " you"}, "finish_reason": None},
+        {"delta": {"content": " want"}, "finish_reason": None},
+        {"delta": {"content": " to"}, "finish_reason": None},
+        {"delta": {"content": " talk"}, "finish_reason": None},
+        {"delta": {"content": " about"}, "finish_reason": None},
+        {"delta": {"function_call": {"name": "wave"}}, "finish_reason": None},
+        {
+            "delta": {"function_call": {"name": "_hello", "arguments": "{\n"}},
+            "finish_reason": None,
+        },
+        {
+            "delta": {"function_call": {"arguments": '  "name": "user"\n}'}},
+            "finish_reason": None,
+        },
+        {"delta": {}, "finish_reason": "function_call"},
+    ],
+    [
+        {"delta": {"function_call": {"name": "wave"}}, "finish_reason": None},
+        {
+            "delta": {"function_call": {"name": "_hello", "arguments": "{\n"}},
+            "finish_reason": None,
+        },
+        {
+            "delta": {"function_call": {"arguments": '  "name": "user"\n}'}},
+            "finish_reason": None,
+        },
+        {"delta": {}, "finish_reason": "function_call"},
+    ],
 ]
 
 EXPECTED_SENTENCES = [
@@ -189,17 +253,76 @@ EXPECTED_SENTENCES = [
         "$2 + $3.00 is equal to $5.",
         "$6 + $4 is equal to $10.",
     ],
+    [
+        "Hello.",
+        "What do you want to talk about",
+        FunctionCall(name="wave_hello", arguments='{\n  "name": "user"\n}'),
+    ],
+    [
+        FunctionCall(name="wave_hello", arguments='{\n  "name": "user"\n}'),
+    ],
+]
+
+FUNCTIONS_INPUT = [
+    [
+        {"delta": {"role": "assistant"}, "finish_reason": None},
+        {"delta": {"content": "Hello"}, "finish_reason": None},
+        {"delta": {"content": "."}, "finish_reason": None},
+        {"delta": {"content": " What"}, "finish_reason": None},
+        {"delta": {"content": " do"}, "finish_reason": None},
+        {"delta": {"content": " you"}, "finish_reason": None},
+        {"delta": {"content": " want"}, "finish_reason": None},
+        {"delta": {"content": " to"}, "finish_reason": None},
+        {"delta": {"content": " talk"}, "finish_reason": None},
+        {"delta": {"content": " about"}, "finish_reason": None},
+        {"delta": {"function_call": {"name": "wave"}}, "finish_reason": None},
+        {
+            "delta": {"function_call": {"name": "_hello", "arguments": "{\n"}},
+            "finish_reason": None,
+        },
+        {
+            "delta": {"function_call": {"arguments": '  "name": "user"\n}'}},
+            "finish_reason": None,
+        },
+        {"delta": {}, "finish_reason": "function_call"},
+    ],
+    [
+        {"delta": {"function_call": {"name": "wave"}}, "finish_reason": None},
+        {
+            "delta": {"function_call": {"name": "_hello", "arguments": "{\n"}},
+            "finish_reason": None,
+        },
+        {
+            "delta": {"function_call": {"arguments": '  "name": "user"\n}'}},
+            "finish_reason": None,
+        },
+        {"delta": {}, "finish_reason": "function_call"},
+    ],
+]
+
+FUNCTIONS_OUTPUT = [
+    [
+        "Hello.",
+        "What do you want to talk about",
+        FunctionCall(name="wave_hello", arguments='{\n  "name": "user"\n}'),
+    ],
+    [
+        FunctionCall(name="wave_hello", arguments='{\n  "name": "user"\n}'),
+    ],
 ]
 
 
 @pytest.mark.asyncio
-async def test_stream_openai_response_async():
+async def test_collate_response_async():
     test_cases = [
         StreamOpenAIResponseTestCase(
             openai_objects=[
                 create_chatgpt_openai_object(**obj) for obj in openai_objects
             ],
             expected_sentences=expected_sentences,
+            get_functions=any(
+                isinstance(item, FunctionCall) for item in expected_sentences
+            ),
         )
         for openai_objects, expected_sentences in zip(
             OPENAI_OBJECTS, EXPECTED_SENTENCES
@@ -208,8 +331,112 @@ async def test_stream_openai_response_async():
 
     for test_case in test_cases:
         actual_sentences = []
-        async for sentence in stream_openai_response_async(
-            _agen_from_list(test_case.openai_objects), GET_TEXT
+        async for sentence in collate_response_async(
+            openai_get_tokens(_agen_from_list(test_case.openai_objects)),
+            get_functions=test_case.get_functions,
         ):
             actual_sentences.append(sentence)
         assert actual_sentences == test_case.expected_sentences
+
+
+def test_format_openai_chat_messages_from_transcript():
+    test_cases = [
+        (
+            (
+                Transcript(
+                    event_logs=[
+                        Message(sender=Sender.BOT, text="Hello!"),
+                        Message(sender=Sender.BOT, text="How are you doing today?"),
+                        Message(sender=Sender.HUMAN, text="I'm doing well, thanks!"),
+                    ]
+                ),
+                "prompt preamble",
+            ),
+            [
+                {"role": "system", "content": "prompt preamble"},
+                {"role": "assistant", "content": "Hello! How are you doing today?"},
+                {"role": "user", "content": "I'm doing well, thanks!"},
+            ],
+        ),
+        (
+            (
+                Transcript(
+                    event_logs=[
+                        Message(sender=Sender.BOT, text="Hello!"),
+                        Message(sender=Sender.BOT, text="How are you doing today?"),
+                        Message(sender=Sender.HUMAN, text="I'm doing well, thanks!"),
+                    ]
+                ),
+                None,
+            ),
+            [
+                {"role": "assistant", "content": "Hello! How are you doing today?"},
+                {"role": "user", "content": "I'm doing well, thanks!"},
+            ],
+        ),
+        (
+            (
+                Transcript(
+                    event_logs=[
+                        Message(sender=Sender.BOT, text="Hello!"),
+                        Message(sender=Sender.BOT, text="How are you doing today?"),
+                    ]
+                ),
+                "prompt preamble",
+            ),
+            [
+                {"role": "system", "content": "prompt preamble"},
+                {"role": "assistant", "content": "Hello! How are you doing today?"},
+            ],
+        ),
+        (
+            (
+                Transcript(
+                    event_logs=[
+                        Message(sender=Sender.BOT, text="Hello!"),
+                        Message(
+                            sender=Sender.HUMAN, text="Hello, what's the weather like?"
+                        ),
+                        ActionStart(
+                            action_type="weather",
+                            action_input=ActionInput(
+                                action_config=ActionConfig(),
+                                conversation_id="asdf",
+                                params={},
+                            ),
+                        ),
+                        ActionFinish(
+                            action_type="weather",
+                            action_output=ActionOutput(
+                                action_type="weather", response={}
+                            ),
+                        ),
+                    ]
+                ),
+                None,
+            ),
+            [
+                {"role": "assistant", "content": "Hello!"},
+                {
+                    "role": "user",
+                    "content": "Hello, what's the weather like?",
+                },
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "function_call": {
+                        "name": "weather",
+                        "arguments": "{}",
+                    },
+                },
+                {
+                    "role": "function",
+                    "name": "weather",
+                    "content": "{}",
+                },
+            ],
+        ),
+    ]
+
+    for params, expected_output in test_cases:
+        assert format_openai_chat_messages_from_transcript(*params) == expected_output

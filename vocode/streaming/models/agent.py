@@ -1,10 +1,13 @@
 from typing import List, Optional, Union
 from enum import Enum
+from langchain.prompts import PromptTemplate
 
 from pydantic import validator
+from vocode.streaming.models.actions import ActionConfig
 
 from vocode.streaming.models.message import BaseMessage
 from .model import TypedModel, BaseModel
+from .vector_db import VectorDBConfig
 
 FILLER_AUDIO_DEFAULT_SILENCE_THRESHOLD_SECONDS = 0.5
 LLM_AGENT_DEFAULT_TEMPERATURE = 1.0
@@ -28,6 +31,7 @@ class AgentType(str, Enum):
     CHAT_VERTEX_AI = "agent_chat_vertex_ai"
     ECHO = "agent_echo"
     GPT4ALL = "agent_gpt4all"
+    LLAMACPP = "agent_llamacpp"
     INFORMATION_RETRIEVAL = "agent_information_retrieval"
     RESTFUL_USER_IMPLEMENTED = "agent_restful_user_implemented"
     WEBSOCKET_USER_IMPLEMENTED = "agent_websocket_user_implemented"
@@ -67,6 +71,7 @@ class AgentConfig(TypedModel, type=AgentType.BASE.value):
     send_filler_audio: Union[bool, FillerAudioConfig] = False
     webhook_config: Optional[WebhookConfig] = None
     track_bot_sentiment: bool = False
+    actions: Optional[List[ActionConfig]] = None
 
 
 class CutOffResponse(BaseModel):
@@ -90,6 +95,7 @@ class ChatGPTAgentConfig(AgentConfig, type=AgentType.CHAT_GPT.value):
     max_tokens: int = LLM_AGENT_DEFAULT_MAX_TOKENS
     cut_off_response: Optional[CutOffResponse] = None
     azure_params: Optional[AzureOpenAIConfig] = None
+    vector_db_config: Optional[VectorDBConfig] = None
 
 
 class ChatAnthropicAgentConfig(AgentConfig, type=AgentType.CHAT_ANTHROPIC.value):
@@ -104,12 +110,10 @@ class ChatVertexAIAgentConfig(AgentConfig, type=AgentType.CHAT_VERTEX_AI.value):
     generate_responses: bool = False  # Google Vertex AI doesn't support streaming
 
 
-class ActionAgentConfig(AgentConfig, type=AgentType.ACTION.value):
+class LlamacppAgentConfig(AgentConfig, type=AgentType.LLAMACPP.value):
     prompt_preamble: str
-    actions: List[str]
-    model_name: str = ACTION_AGENT_DEFAULT_MODEL_NAME
-    temperature: float = LLM_AGENT_DEFAULT_TEMPERATURE
-    max_tokens: int = LLM_AGENT_DEFAULT_MAX_TOKENS
+    llamacpp_kwargs: dict = {}
+    prompt_template: Optional[Union[PromptTemplate, str]] = None
 
 
 class InformationRetrievalAgentConfig(
