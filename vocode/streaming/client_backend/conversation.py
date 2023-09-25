@@ -105,8 +105,11 @@ class ConversationRouter(BaseRouter):
             )
             if message.type == WebSocketMessageType.STOP:
                 break
-            audio_message = typing.cast(AudioMessage, message)
-            conversation.receive_audio(audio_message.get_bytes())
+            if message.type == WebSocketMessageType.TRANSCRIPT:
+                conversation.receive_message(message.text)
+            elif message.type == WebSocketMessageType.AUDIO:
+                audio_message = typing.cast(AudioMessage, message)
+                conversation.receive_audio(audio_message.get_bytes())
         output_device.mark_closed()
         await conversation.terminate()
 
